@@ -16,13 +16,19 @@ const dbConfig = {
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE
 };
-
-// Rota para cadastrar aluno e suas matérias
 app.post('/register', async (req, res) => {
-    const { nome, idade, materias } = req.body;
+    // Adicione 'faltas' na desestruturação do req.body
+    const { nome, idade, faltas, materias } = req.body;
 
-    if (!nome || !idade || !materias || !Array.isArray(materias)) {
-        return res.status(400).json({ message: 'Dados inválidos. Nome, idade e matérias são obrigatórios.' });
+    // Validação aprimorada, incluindo faltas
+    if (!nome || !idade || faltas === undefined || !materias || !Array.isArray(materias)) {
+        return res.status(400).json({ message: 'Dados inválidos. Nome, idade, faltas e matérias são obrigatórios.' });
+    }
+
+    // Validação do tipo de faltas (deve ser um número não negativo)
+    const numFaltas = parseInt(faltas, 10);
+    if (isNaN(numFaltas) || numFaltas < 0) {
+        return res.status(400).json({ message: 'O campo faltas deve ser um número inteiro não negativo.' });
     }
 
     let connection;
@@ -30,27 +36,27 @@ app.post('/register', async (req, res) => {
         connection = await mysql.createConnection(dbConfig);
         await connection.beginTransaction(); // Inicia uma transação
 
-        // Inserir o aluno
+        // Inserir o aluno (AGORA INCLUINDO 'faltas')
         const [alunoResult] = await connection.execute(
-            'INSERT INTO alunos (nome, idade) VALUES (?, ?)',
-            [nome, idade]
+            'INSERT INTO alunos (nome, idade, faltas) VALUES (?, ?, ?)', // Adicione 'faltas' aqui
+            [String(nome).trim(), parseInt(String(idade).trim()), numFaltas] // E aqui o valor de numFaltas
         );
         const alunoId = alunoResult.insertId;
 
         // Inserir as matérias do aluno
         for (const materia of materias) {
-            if (!materia.nome || materia.nota === undefined) {
+            if (!materia.nome || materia.nota === undefined || String(materia.nota).trim() === '') {
                 await connection.rollback(); // Desfaz a transação em caso de erro
-                return res.status(400).json({ message: 'Dados de matéria inválidos.' });
+                return res.status(400).json({ message: 'Dados de matéria inválidos (nome ou nota ausente/vazia).' });
             }
             await connection.execute(
                 'INSERT INTO materias_aluno (aluno_id, nome_materia, nota) VALUES (?, ?, ?)',
-                [alunoId, materia.nome, materia.nota]
+                [alunoId, String(materia.nome).trim(), parseFloat(String(materia.nota).replace(',', '.'))] // Garante float e lida com vírgulas
             );
         }
 
         await connection.commit(); // Confirma a transação
-        res.status(201).json({ message: 'Aluno e matérias cadastrados com sucesso!', alunoId });
+        res.status(201).json({ message: 'Aluno, faltas e matérias cadastrados com sucesso!', alunoId });
 
     } catch (error) {
         if (connection) {
@@ -79,29 +85,38 @@ app.get('/alunos', async (req, res) => {
         }
     }
 });
-
-// Opcional: Rota para buscar alunos com suas matérias (se precisar de mais detalhes no relatório)
-app.get('/alunos/:id/detalhes', async (req, res) => {
+// Rota para buscar um aluno por ID (incluindo suas matérias)
+app.get('/alunos/:id', async (req, res) => {
     const alunoId = req.params.id;
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
-        const [alunoRows] = await connection.execute('SELECT id, nome, idade FROM alunos WHERE id = ?', [alunoId]);
+
+        // Buscar dados do aluno
+        const [alunoRows] = await connection.execute(
+            'SELECT id, nome, idade, faltas FROM alunos WHERE id = ?',
+            [alunoId]
+        );
+
         if (alunoRows.length === 0) {
             return res.status(404).json({ message: 'Aluno não encontrado.' });
         }
 
-        const [materiasRows] = await connection.execute('SELECT nome_materia, nota FROM materias_aluno WHERE aluno_id = ?', [alunoId]);
+        const aluno = alunoRows[0];
 
-        const alunoDetalhes = {
-            ...alunoRows[0],
-            materias: materiasRows
-        };
+        // Buscar matérias e notas do aluno
+        const [materiasRows] = await connection.execute(
+            'SELECT nome_materia, nota FROM materias_aluno WHERE aluno_id = ?',
+            [alunoId]
+        );
 
-        res.status(200).json(alunoDetalhes);
+        aluno.materias = materiasRows; // Adiciona as matérias ao objeto do aluno
+
+        res.status(200).json(aluno);
+
     } catch (error) {
-        console.error('Erro ao buscar detalhes do aluno:', error);
-        res.status(500).json({ message: 'Erro interno do servidor ao buscar detalhes do aluno.' });
+        console.error('Erro ao buscar aluno por ID:', error);
+        res.status(500).json({ message: 'Erro interno do servidor ao buscar aluno.' });
     } finally {
         if (connection) {
             connection.end();
@@ -330,6 +345,221 @@ app.post('/frequencia/import', async (req, res) => {
         }
     }
 });
+
+// Rota para atualizar um aluno e suas matérias
+app.put('/alunos/:id', async (req, res) => {
+    const alunoId = req.params.id;
+    const { nome, idade, faltas, materias } = req.body;
+
+    if (!nome || !idade || faltas === undefined || !materias || !Array.isArray(materias)) {
+        return res.status(400).json({ message: 'Dados inválidos. Nome, idade, faltas e matérias são obrigatórios para atualização.' });
+    }
+
+    const numFaltas = parseInt(faltas, 10);
+    if (isNaN(numFaltas) || numFaltas < 0) {
+        return res.status(400).json({ message: 'O campo faltas deve ser um número inteiro não negativo.' });
+    }
+
+    const numIdade = parseInt(idade, 10);
+    if (isNaN(numIdade) || numIdade <= 0) {
+      return res.status(400).json({ message: 'A idade deve ser um número inteiro positivo.' });
+    }
+
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+        await connection.beginTransaction(); // Inicia uma transação
+
+        // 1. Atualizar dados do aluno na tabela 'alunos'
+        const [updateAlunoResult] = await connection.execute(
+            'UPDATE alunos SET nome = ?, idade = ?, faltas = ? WHERE id = ?',
+            [String(nome).trim(), numIdade, numFaltas, alunoId]
+        );
+
+        if (updateAlunoResult.affectedRows === 0) {
+            await connection.rollback();
+            return res.status(404).json({ message: 'Aluno não encontrado para atualização.' });
+        }
+
+        // 2. Remover todas as matérias existentes para este aluno (para reinserir as atualizadas)
+        await connection.execute(
+            'DELETE FROM materias_aluno WHERE aluno_id = ?',
+            [alunoId]
+        );
+
+        // 3. Inserir as matérias atualizadas do aluno
+        for (const materia of materias) {
+            if (!materia.nome || materia.nota === undefined || String(materia.nota).trim() === '') {
+                await connection.rollback();
+                return res.status(400).json({ message: 'Dados de matéria inválidos (nome ou nota ausente/vazia).' });
+            }
+            await connection.execute(
+                'INSERT INTO materias_aluno (aluno_id, nome_materia, nota) VALUES (?, ?, ?)',
+                [alunoId, String(materia.nome).trim(), parseFloat(String(materia.nota).replace(',', '.'))]
+            );
+        }
+
+        await connection.commit(); // Confirma a transação
+        res.status(200).json({ message: 'Aluno atualizado com sucesso!' });
+
+    } catch (error) {
+        if (connection) {
+            await connection.rollback(); // Desfaz a transação em caso de erro
+        }
+        console.error('Erro ao atualizar aluno:', error);
+        res.status(500).json({ message: 'Erro interno do servidor ao atualizar aluno.' });
+    } finally {
+        if (connection) {
+            connection.end(); // Fecha a conexão
+        }
+    }
+});
+app.delete('/alunos/:id', async (req, res) => {
+    const alunoId = req.params.id;  
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+        await connection.beginTransaction(); // Inicia uma transação
+
+        // 1. Excluir matérias do aluno primeiro (para evitar erro de chave estrangeira se houver)
+        const [deleteMateriasResult] = await connection.execute(
+            'DELETE FROM materias_aluno WHERE aluno_id = ?',
+            [alunoId]
+        );
+
+        // 2. Excluir o aluno da tabela 'alunos'
+        const [deleteAlunoResult] = await connection.execute(
+            'DELETE FROM alunos WHERE id = ?',
+            [alunoId]
+        );
+
+        if (deleteAlunoResult.affectedRows === 0) {
+            await connection.rollback(); // Desfaz se o aluno não foi encontrado
+            return res.status(404).json({ message: 'Aluno não encontrado para exclusão.' });
+        }
+
+        await connection.commit(); // Confirma a transação
+        res.status(200).json({ message: 'Aluno e suas matérias excluídos com sucesso!' });
+
+    } catch (error) {
+        if (connection) {
+            await connection.rollback(); // Desfaz a transação em caso de erro
+        }
+        console.error('Erro ao excluir aluno:', error);
+        res.status(500).json({ message: 'Erro interno do servidor ao excluir aluno.' });
+    } finally {
+        if (connection) {
+            connection.end(); // Fecha a conexão
+        }
+    }
+});
+
+app.get('/alunos/:id/detalhes', async (req, res) => {
+    const alunoId = req.params.id;
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+
+        // Buscar dados do aluno (incluindo a coluna 'faltas')
+        const [alunoRows] = await connection.execute(
+            'SELECT id, nome, idade, faltas FROM alunos WHERE id = ?',
+            [alunoId]
+        );
+
+        if (alunoRows.length === 0) {
+            return res.status(404).json({ message: 'Aluno não encontrado.' });
+        }
+
+        const aluno = alunoRows[0]; // Pega o primeiro (e único) resultado
+
+        // Buscar matérias e notas do aluno
+        const [materiasRows] = await connection.execute(
+            'SELECT nome_materia, nota FROM materias_aluno WHERE aluno_id = ?',
+            [alunoId]
+        );
+
+        // Adiciona as matérias ao objeto do aluno.
+        // Se a coluna no seu materias_aluno for 'nome_materia', mantenha assim.
+        // Se for apenas 'nome', ajuste para 'nome_materia' conforme seu schema.
+        aluno.materias = materiasRows.map(m => ({ nome: m.nome_materia, nota: m.nota }));
+
+
+        res.status(200).json(aluno);
+
+    } catch (error) {
+        console.error('Erro ao buscar detalhes do aluno por ID:', error);
+        res.status(500).json({ message: 'Erro interno do servidor ao buscar detalhes do aluno.' });
+    } finally {
+        if (connection) {
+            connection.end(); // Fecha a conexão
+        }
+    }
+});
+app.post('/alunos', async (req, res) => {
+    // Certifique-se de que o frontend está enviando 'nome', 'idade', 'faltas' e 'materias'
+    const { nome, idade, faltas, materias } = req.body;
+
+    if (!nome || !idade || faltas === undefined || !materias || !Array.isArray(materias)) {
+        return res.status(400).json({ message: 'Dados inválidos. Nome, idade, faltas e matérias são obrigatórios para o cadastro.' });
+    }
+
+    const numFaltas = parseInt(String(faltas).trim(), 10);
+    if (isNaN(numFaltas) || numFaltas < 0) {
+        return res.status(400).json({ message: 'O total de faltas deve ser um número inteiro não negativo.' });
+    }
+
+    const numIdade = parseInt(String(idade).trim(), 10);
+    if (isNaN(numIdade) || numIdade <= 0) {
+      return res.status(400).json({ message: 'A idade deve ser um número inteiro positivo.' });
+    }
+
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+        await connection.beginTransaction(); // Inicia uma transação
+
+        // Inserir o aluno
+        const [alunoResult] = await connection.execute(
+            'INSERT INTO alunos (nome, idade, faltas) VALUES (?, ?, ?)',
+            [String(nome).trim(), numIdade, numFaltas]
+        );
+        const alunoId = alunoResult.insertId;
+
+        // Inserir as matérias do aluno
+        for (const materia of materias) {
+            // Validações adicionais para matéria (nome não vazio, nota numérica)
+            if (!materia.nome || String(materia.nome).trim() === '' || materia.nota === undefined || String(materia.nota).trim() === '') {
+                await connection.rollback(); // Desfaz a transação em caso de erro
+                return res.status(400).json({ message: 'Dados de matéria inválidos (nome ou nota ausente/vazia).' });
+            }
+            const notaMateria = parseFloat(String(materia.nota).replace(',', '.').trim());
+            if (isNaN(notaMateria)) {
+                await connection.rollback();
+                return res.status(400).json({ message: `Nota inválida para a matéria "${materia.nome}".` });
+            }
+
+            await connection.execute(
+                'INSERT INTO materias_aluno (aluno_id, nome_materia, nota) VALUES (?, ?, ?)',
+                [alunoId, String(materia.nome).trim(), notaMateria]
+            );
+        }
+
+        await connection.commit(); // Confirma a transação
+        res.status(201).json({ message: 'Aluno e matérias cadastrados com sucesso!', alunoId });
+
+    } catch (error) {
+        if (connection) {
+            await connection.rollback(); // Desfaz a transação em caso de erro
+        }
+        console.error('Erro ao cadastrar aluno:', error);
+        res.status(500).json({ message: 'Erro interno do servidor ao cadastrar aluno.' });
+    } finally {
+        if (connection) {
+            connection.end(); // Fecha a conexão
+        }
+    }
+});
+
 
 app.listen(port, () => {
     console.log(`Backend rodando em http://localhost:${port}`);

@@ -1,14 +1,19 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowRight, Book, CalendarIcon, LayoutDashboardIcon, User2Icon } from 'lucide-react'
+import { ArrowRight, Book, CalendarIcon, DeleteIcon, DropletIcon, Edit2Icon, InfoIcon, LayoutDashboardIcon, LucideDelete, RemoveFormattingIcon, User2Icon, UserCircle2Icon } from 'lucide-react'
 import Image from 'next/image'
 
 const features = [
   { label: 'Gerar relatório PDF', icon: CalendarIcon, page: '/pages/relatorio_aluno_pdf' },
   { label: 'Visualizar Matérias do Semestre', icon: Book , page: '/pages/materias_dashboard'},
-  { label: 'Resultados', icon: LayoutDashboardIcon },
-  { label: 'Add Account', icon: User2Icon, page: '/pages/cadastro_aluno' },
+  { label: 'Resultados', icon: LayoutDashboardIcon, page : '/pages/dashboard_geral' },
+  { label: 'Cadastrar Alunos', icon: User2Icon, page: '/pages/cadastro_aluno' },
+  { label: 'Regulamentos mandatórios', icon: InfoIcon, page: '#' },
+  { label: 'Editar Informações', icon: Edit2Icon, page: '/pages/editar_aluno' }
+
+
+
 ]
 
 export default function HomePage() {

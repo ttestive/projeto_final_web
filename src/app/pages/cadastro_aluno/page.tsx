@@ -20,6 +20,7 @@ interface MateriaInput {
 interface AlunoFormData {
   nome: string;
   idade: string;
+  faltas: number; // Adicionando o campo de faltas
   materias: { nome: string; nota: string }[];
 }
 
@@ -30,7 +31,7 @@ interface RawAlunoRow {
 export default function CadastroAlunoPage() {
   const [nome, setNome] = useState('');
   const [idade, setIdade] = useState('');
-  // Novo estado para as matérias/notas no formulário individual
+  const [faltas, setFaltas] = useState<string>('0'); // Novo estado para faltas no formulário individual
   const [materiasForm, setMateriasForm] = useState<MateriaInput[]>([{ id: 1, nome: '', nota: '' }]);
   const [file, setFile] = useState<File | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -39,6 +40,7 @@ export default function CadastroAlunoPage() {
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
       setFile(event.target.files[0]);
+      setFeedbackMessage(null); // Limpa feedback anterior
     }
   };
 
@@ -48,7 +50,7 @@ export default function CadastroAlunoPage() {
       return;
     }
 
-    setFeedbackMessage(null);
+    setFeedbackMessage({ type: 'info', message: 'Processando arquivo...' }); // Feedback de processamento
 
     const fileName = file.name;
     const fileExtension = fileName.split('.').pop()?.toLowerCase();
@@ -64,10 +66,16 @@ export default function CadastroAlunoPage() {
           Papa.parse<RawAlunoRow>(data as string, {
             header: true,
             skipEmptyLines: true,
+            // Adicione delimiter: ',' se souber que o CSV usa vírgulas
+            delimiter: ',', // Adicionado para garantir o delimitador correto
+            transformHeader: (header) => header.trim().toLowerCase(), // Normaliza cabeçalhos
             complete: (results) => {
               if (results.errors.length) {
                 console.error('Erros de parsing CSV:', results.errors);
-                setFeedbackMessage({ type: 'error', message: 'Erro ao analisar o CSV. Verifique o formato.' });
+                results.errors.forEach(err => { // Log detalhado para depuração
+                  console.log(`Erro: ${err.message} (Código: ${err.code}) na Linha: ${err.row}, Coluna: ${err.column}`);
+                });
+                setFeedbackMessage({ type: 'error', message: 'Erro ao analisar o CSV. Verifique o formato e o delimitador (deve ser vírgula). Veja o console para mais detalhes.' });
                 return;
               }
               parsedData = results.data;
@@ -78,24 +86,25 @@ export default function CadastroAlunoPage() {
           const workbook = XLSX.read(data, { type: 'array' });
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
-          parsedData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as RawAlunoRow[];
+          // Use { header: 1 } para obter array de arrays e depois mapeie para objetos com cabeçalhos normalizados
+          const excelData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as string[][];
 
-          if (parsedData.length === 0) {
-            setFeedbackMessage({ type: 'error', message: 'Arquivo XLSX vazio ou sem dados.' });
+          if (excelData.length < 2) { // Precisa de pelo menos uma linha de cabeçalho e uma de dados
+            setFeedbackMessage({ type: 'error', message: 'Arquivo XLSX vazio ou sem dados válidos.' });
             return;
           }
 
-          const headers: string[] = parsedData[0].map((h: string) => String(h || '').trim());
-          const rows = parsedData.slice(1);
+          const headers: string[] = excelData[0].map(h => String(h || '').trim().toLowerCase()); // Normaliza cabeçalhos
+          const rows = excelData.slice(1);
 
-          const formattedRows = rows.map(row => {
+          parsedData = rows.map(row => {
             const obj: RawAlunoRow = {};
             headers.forEach((header, index) => {
               obj[header] = row[index];
             });
             return obj;
           });
-          parsedData = formattedRows;
+          
           processAndSendStudents(parsedData);
 
         } else {
@@ -117,9 +126,7 @@ export default function CadastroAlunoPage() {
     } else if (fileExtension === 'xlsx') {
       reader.readAsArrayBuffer(file);
     }
-  };
-
-  const processAndSendStudents = async (rawData: RawAlunoRow[]) => {
+  };  const processAndSendStudents = async (rawData: RawAlunoRow[]) => {
     const alunosParaImportar: AlunoFormData[] = rawData.map((row: RawAlunoRow) => {
       const normalizedRow: { [key: string]: any } = {};
       for (const key in row) {
@@ -130,22 +137,39 @@ export default function CadastroAlunoPage() {
 
       const nomeAluno = String(normalizedRow.nome || normalizedRow['nome do aluno'] || '').trim();
       const idadeAluno = String(normalizedRow.idade || normalizedRow.age || '').trim();
+      const faltasAluno = parseInt(String(normalizedRow.faltas || normalizedRow.absences || '0').trim(), 10);
 
       const materias: { nome: string; nota: string }[] = [];
       for (const key in normalizedRow) {
         if (Object.prototype.hasOwnProperty.call(normalizedRow, key)) {
           const lowerKey = key.toLowerCase().trim();
-          if (
-            lowerKey !== 'id' &&
-            lowerKey !== 'nome' &&
-            lowerKey !== 'nome do aluno' &&
-            lowerKey !== 'idade' &&
-            lowerKey !== 'age' &&
-            normalizedRow[key] !== undefined &&
-            normalizedRow[key] !== null &&
-            String(normalizedRow[key]).trim() !== ''
-          ) {
+
+          // Defina uma lista clara de colunas que *não* são matérias
+          const nonMateriaKeys = [
+            'id',          // Variação comum de ID
+            'aluno_id',    // Que você já havia especificado
+            'id_aluno',    // Outra variação que pode ser usada
+            'id_do_aluno', // Mais uma variação
+            'nome',
+            'nome do aluno',
+            'idade',
+            'age',
+            'faltas',
+            'absences'
+          ];
+
+          // Verifica se a chave atual está na lista de "não matérias"
+          const isMateriaKey = !nonMateriaKeys.includes(lowerKey);
+
+          // E se o valor não é nulo/vazio
+          const hasValidValue = normalizedRow[key] !== undefined &&
+                                normalizedRow[key] !== null &&
+                                String(normalizedRow[key]).trim() !== '';
+
+          // Se for uma chave de matéria E tiver um valor válido, adicione como matéria
+          if (isMateriaKey && hasValidValue) {
             materias.push({
+              // Use a chave original para o nome da matéria, pois é assim que ela está no CSV
               nome: key.trim(),
               nota: String(normalizedRow[key]).trim()
             });
@@ -156,9 +180,11 @@ export default function CadastroAlunoPage() {
       return {
         nome: nomeAluno,
         idade: idadeAluno,
+        faltas: isNaN(faltasAluno) ? 0 : faltasAluno,
         materias: materias,
       };
     }).filter(aluno => aluno.nome !== '' && aluno.idade !== '');
+
 
     if (alunosParaImportar.length === 0) {
       setFeedbackMessage({ type: 'error', message: 'Nenhum aluno válido encontrado no arquivo após processamento.' });
@@ -168,9 +194,10 @@ export default function CadastroAlunoPage() {
     console.log('Alunos processados para importação:', alunosParaImportar);
 
     try {
+      setFeedbackMessage({ type: 'info', message: `Importando ${alunosParaImportar.length} alunos...` }); // Feedback de progresso
       await axios.post('http://localhost:3001/alunos/import', { alunos: alunosParaImportar });
       setFeedbackMessage({ type: 'success', message: 'Alunos importados com sucesso!' });
-      setFile(null);
+      setFile(null); // Limpa o arquivo selecionado
     } catch (error) {
       console.error('Erro ao importar alunos:', error);
       setFeedbackMessage({ type: 'error', message: 'Erro ao importar alunos. Verifique o console do navegador e do servidor.' });
@@ -198,18 +225,29 @@ export default function CadastroAlunoPage() {
     event.preventDefault();
     setFeedbackMessage(null);
 
-    if (!nome || !idade) {
-      setFeedbackMessage({ type: 'error', message: 'Por favor, preencha nome e idade.' });
+    // Validação básica do formulário
+    if (!nome.trim() || !idade.trim() || isNaN(parseInt(idade.trim(), 10)) || parseInt(idade.trim(), 10) <= 0) {
+      setFeedbackMessage({ type: 'error', message: 'Por favor, preencha o nome e uma idade válida para o aluno.' });
+      return;
+    }
+
+    const faltasNum = parseInt(faltas.trim(), 10);
+    if (isNaN(faltasNum) || faltasNum < 0) {
+      setFeedbackMessage({ type: 'error', message: 'Por favor, insira um número válido para as faltas (0 ou mais).' });
       return;
     }
 
     // Filtra matérias vazias antes de enviar
     const materiasValidas = materiasForm.filter(m => m.nome.trim() !== '' && m.nota.trim() !== '');
+    
+    // Converte notas para número se necessário, ou envie como string se o backend espera string
+    const materiasFormatadas = materiasValidas.map(m => ({ nome: m.nome, nota: m.nota })); // Mantido como string, ajuste se o backend espera number
 
     const alunoData: AlunoFormData = {
-      nome,
-      idade: idade,
-      materias: materiasValidas.map(m => ({ nome: m.nome, nota: m.nota }))
+      nome: nome.trim(),
+      idade: idade.trim(),
+      faltas: faltasNum,
+      materias: materiasFormatadas,
     };
 
     console.log('Dados do aluno para cadastro individual:', alunoData);
@@ -217,9 +255,11 @@ export default function CadastroAlunoPage() {
     try {
       await axios.post('http://localhost:3001/alunos', alunoData);
       setFeedbackMessage({ type: 'success', message: 'Aluno cadastrado com sucesso!' });
+      // Reseta o formulário
       setNome('');
       setIdade('');
-      setMateriasForm([{ id: 1, nome: '', nota: '' }]); // Reseta as matérias
+      setFaltas('0');
+      setMateriasForm([{ id: 1, nome: '', nota: '' }]);
     } catch (error) {
       console.error('Erro ao cadastrar aluno:', error);
       setFeedbackMessage({ type: 'error', message: 'Erro ao cadastrar aluno. Tente novamente.' });
@@ -231,7 +271,7 @@ export default function CadastroAlunoPage() {
       <h1 className="text-2xl font-bold mb-6 text-[#142582] dark:text-[#a7a7e6]">Cadastro de Alunos</h1>
 
       {feedbackMessage && (
-        <div className={`p-3 rounded-md mb-4 ${feedbackMessage.type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+        <div className={`p-3 rounded-md mb-4 ${feedbackMessage.type === 'success' ? 'bg-green-100 text-green-700' : feedbackMessage.type === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
           {feedbackMessage.message}
         </div>
       )}
@@ -281,6 +321,19 @@ export default function CadastroAlunoPage() {
               className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
             />
           </div>
+          {/* Campo de Faltas */}
+          <div>
+            <Label htmlFor="faltas" className="text-gray-700 dark:text-gray-300">Total de Faltas</Label>
+            <Input
+              id="faltas"
+              type="number"
+              value={faltas}
+              onChange={(e) => setFaltas(e.target.value)}
+              min="0" // Não permite faltas negativas
+              required
+              className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
+            />
+          </div>
 
           {/* Campos de Matérias e Notas */}
           <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
@@ -310,7 +363,7 @@ export default function CadastroAlunoPage() {
                     className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
                   />
                 </div>
-                {materiasForm.length > 1 && ( // Só mostra o botão de remover se houver mais de uma matéria
+                {materiasForm.length > 1 && (
                   <Button
                     type="button"
                     variant="ghost"

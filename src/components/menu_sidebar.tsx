@@ -9,7 +9,7 @@ import { ThemeProvider } from '@/context/ThemeContext'
 
 const links = [
   { href: '/', label: 'Home' },
-  { href: '/dashboard', label: 'Dashboard' },
+  { href: '/pages/dashboard_geral', label: 'Dashboard' },
   { href: '/pages/configs', label: 'Configurações' },
 ]
 
