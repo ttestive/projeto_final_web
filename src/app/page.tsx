@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowRight, Book, CalendarIcon, DeleteIcon, DropletIcon, Edit2Icon, InfoIcon, LayoutDashboardIcon, LucideDelete, RemoveFormattingIcon, User2Icon, UserCircle2Icon } from 'lucide-react'
+import { ArrowRight, Book, CalendarIcon, DeleteIcon, DropletIcon, Edit2Icon, InfoIcon, LayoutDashboardIcon, LucideDelete, RemoveFormattingIcon, TestTube2Icon, User2Icon, UserCircle2Icon } from 'lucide-react'
 import Image from 'next/image'
 
 const features = [
@@ -10,10 +10,8 @@ const features = [
   { label: 'Resultados', icon: LayoutDashboardIcon, page : '/pages/dashboard_geral' },
   { label: 'Cadastrar Alunos', icon: User2Icon, page: '/pages/cadastro_aluno' },
   { label: 'Regulamentos mandatórios', icon: InfoIcon, page: '#' },
-  { label: 'Editar Informações', icon: Edit2Icon, page: '/pages/editar_aluno' }
-
-
-
+  { label: 'Editar Informações', icon: Edit2Icon, page: '/pages/editar_aluno' },
+  { label: 'Testes do Sistema', icon: TestTube2Icon, page: '/pages/test_runner' }
 ]
 
 export default function HomePage() {
